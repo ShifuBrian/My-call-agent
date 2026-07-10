@@ -1,0 +1,20 @@
+{
+  "name": "my-call-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Twilio inbound-call webhook that connects calls to an ElevenLabs Agent.",
+  "main": "index.js",
+  "type": "commonjs",
+  "packageManager": "pnpm@11.7.0",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "twilio": "^5.8.0"
+  }
+}
