@@ -129,6 +129,25 @@ test("outbound e-mailverslag is Nederlands en bevat opdracht", () => {
   assert.match(email.text, /Ontvanger: Dat is goed/);
 });
 
+test("ontbrekende data-collectionwaarden worden alleen als Onbekend getoond", () => {
+  const email = buildCallEmail({ type: "post_call_transcription", data: {
+    agent_id: "outbound-agent",
+    conversation_initiation_client_data: { dynamic_variables: { call_type: "message_delivery", recipient_name: "Eddy", message: "Testbericht" } },
+    analysis: { data_collection_results: {
+      recipient_response: {
+        data_collection_id: "recipient_response",
+        value: null,
+        json_schema: { type: "string", description: "Technische instructie die niet in de e-mail hoort" },
+        rationale: "Technische uitleg die niet in de e-mail hoort"
+      },
+      message_delivered: { value: "Ja" }
+    } }
+  }});
+  assert.match(email.text, /- recipient response: Onbekend/);
+  assert.match(email.text, /- message delivered: Ja/);
+  assert.doesNotMatch(email.text, /json_schema|rationale|Technische instructie|Technische uitleg/);
+});
+
 test("post-call webhook weigert een ongeldige handtekening", async (t) => {
   const { server, base } = await start({ verifyWebhookEvent: async () => { throw new Error("invalid"); } });
   t.after(() => server.close());

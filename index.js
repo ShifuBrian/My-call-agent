@@ -70,15 +70,28 @@ async function verifyElevenLabsEvent(rawBody, signature, secret) {
 
 function resultValue(value) {
   if (value && typeof value === "object") {
-    return value.value ?? value.result ?? value.data ?? JSON.stringify(value);
+    // ElevenLabs data-collection objects can also contain technical fields such
+    // as `json_schema` and `rationale`. Those must never end up in the report.
+    if (Object.prototype.hasOwnProperty.call(value, "value")) return value.value;
+    if (Object.prototype.hasOwnProperty.call(value, "result")) return value.result;
+    if (Object.prototype.hasOwnProperty.call(value, "data")) return value.data;
+    return null;
   }
   return value;
 }
 
+function emailValue(value) {
+  const resolved = resultValue(value);
+  if (resolved === null || resolved === undefined) return "Onbekend";
+  if (typeof resolved === "string" && !resolved.trim()) return "Onbekend";
+  if (typeof resolved === "object") return "Onbekend";
+  return String(resolved);
+}
+
 function formatCollectedData(results) {
-  if (!results || typeof results !== "object" || !Object.keys(results).length) return "Geen gegevens opgegeven";
+  if (!results || typeof results !== "object" || !Object.keys(results).length) return "Onbekend";
   return Object.entries(results)
-    .map(([key, value]) => `- ${key.replaceAll("_", " ")}: ${resultValue(value) ?? "Niet opgegeven"}`)
+    .map(([key, value]) => `- ${key.replaceAll("_", " ")}: ${emailValue(value)}`)
     .join("\n");
 }
 
