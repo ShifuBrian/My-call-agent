@@ -129,6 +129,37 @@ test("outbound e-mailverslag is Nederlands en bevat opdracht", () => {
   assert.match(email.text, /Ontvanger: Dat is goed/);
 });
 
+test("inbound e-mail gebruikt de Nederlandse Analysis-samenvatting", () => {
+  const email = buildCallEmail({ type: "post_call_transcription", data: {
+    agent_id: "inbound-agent",
+    conversation_id: "conv-nl",
+    analysis: {
+      transcript_summary: "这是一段中文摘要。",
+      data_collection_results: {
+        email_summary_nl: { value: "De beller vraagt Brian om morgen terug te bellen." }
+      }
+    }
+  }});
+  assert.match(email.text, /SAMENVATTING\nDe beller vraagt Brian om morgen terug te bellen\./);
+  assert.doesNotMatch(email.text, /这是一段中文摘要/);
+});
+
+test("inbound e-mail valt terug op de standaard samenvatting", () => {
+  const email = buildCallEmail({ type: "post_call_transcription", data: {
+    agent_id: "inbound-agent",
+    analysis: { transcript_summary: "Fallback summary" }
+  }});
+  assert.match(email.text, /SAMENVATTING\nFallback summary/);
+});
+
+test("e-mailonderwerp bevat geen header-newlines uit gespreksdata", () => {
+  const email = buildCallEmail({ type: "post_call_transcription", data: {
+    agent_id: "inbound-agent",
+    analysis: { data_collection_results: { caller_name: { value: "Jan\r\nBcc: aanvaller@example.com" } } }
+  }});
+  assert.equal(email.subject, "Nieuwe telefonische boodschap van Jan Bcc: aanvaller@example.com");
+});
+
 test("ontbrekende data-collectionwaarden worden alleen als Onbekend getoond", () => {
   const email = buildCallEmail({ type: "post_call_transcription", data: {
     agent_id: "outbound-agent",

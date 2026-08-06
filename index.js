@@ -9,6 +9,8 @@ const ELEVENLABS_REGISTER_CALL_URL = "https://api.elevenlabs.io/v1/convai/twilio
 const ELEVENLABS_OUTBOUND_CALL_URL = "https://api.elevenlabs.io/v1/convai/twilio/outbound-call";
 const RESEND_EMAIL_URL = "https://api.resend.com/emails";
 const CSRF_TTL_MS = 30 * 60 * 1000;
+const MAX_CSRF_TOKENS = 500;
+const MAX_RATE_LIMIT_CLIENTS = 1000;
 
 function requiredEnv(name) {
   const value = process.env[name]?.trim();
@@ -104,6 +106,19 @@ function findCollectedValue(results, names) {
   return "";
 }
 
+function safeSubjectPart(value, fallback) {
+  const text = String(value || "").replace(/[\r\n\0]+/g, " ").trim();
+  return (text || fallback).slice(0, 120);
+}
+
+function storeCsrfToken(tokens, token, now = Date.now()) {
+  for (const [key, expires] of tokens) {
+    if (expires < now) tokens.delete(key);
+  }
+  while (tokens.size >= MAX_CSRF_TOKENS) tokens.delete(tokens.keys().next().value);
+  tokens.set(token, now + CSRF_TTL_MS);
+}
+
 function formatTranscript(transcript, outbound = false) {
   if (!Array.isArray(transcript) || !transcript.length) return "Geen transcript beschikbaar";
   return transcript
@@ -130,13 +145,14 @@ function buildCallEmail(event) {
   const outbound = isOutboundEvent(event);
   const callerName = findCollectedValue(collected, ["caller_name", "naam", "name"]);
   const callerNumber = dynamic.caller_number || dynamic.system__caller_id || "Onbekend nummer";
-  const recipientName = dynamic.recipient_name || "Niet opgegeven";
+  const recipientName = safeSubjectPart(dynamic.recipient_name, "Niet opgegeven");
   const duration = Number.isFinite(Number(metadata.call_duration_secs))
     ? `${Math.round(Number(metadata.call_duration_secs))} seconden`
     : "Onbekend";
   const successful = analysis.call_successful;
   const outcome = successful === true ? "Geslaagd" : successful === false ? "Niet geslaagd" : "Niet beoordeeld";
-  const summary = analysis.transcript_summary || "Geen automatische samenvatting beschikbaar";
+  const dutchSummary = findCollectedValue(collected, ["email_summary_nl", "samenvatting_nl", "summary_nl"]);
+  const summary = dutchSummary || analysis.transcript_summary || "Geen automatische samenvatting beschikbaar";
 
   if (outbound) {
     return {
@@ -170,7 +186,7 @@ function buildCallEmail(event) {
   }
 
   return {
-    subject: `Nieuwe telefonische boodschap${callerName ? ` van ${callerName}` : ""}`,
+    subject: `Nieuwe telefonische boodschap${callerName ? ` van ${safeSubjectPart(callerName, "onbekende beller")}` : ""}`,
     text: [
       "Nieuwe telefonische boodschap voor Brian",
       "",
@@ -331,8 +347,14 @@ function createRateLimiter() {
     const now = Date.now();
     const windowMs = 60 * 60 * 1000;
     const limit = Math.max(1, Math.min(50, Number(optionalEnv("OUTBOUND_MAX_CALLS_PER_HOUR") || 5)));
+    for (const [client, timestamps] of calls) {
+      const active = timestamps.filter((time) => now - time < windowMs);
+      if (active.length) calls.set(client, active);
+      else calls.delete(client);
+    }
+    while (calls.size >= MAX_RATE_LIMIT_CLIENTS) calls.delete(calls.keys().next().value);
     const key = req.ip || "unknown";
-    const recent = (calls.get(key) || []).filter((time) => now - time < windowMs);
+    const recent = calls.get(key) || [];
     if (recent.length >= limit) {
       res.set("Retry-After", String(Math.ceil((windowMs - (now - recent[0])) / 1000)));
       return res.status(429).json({ error: "Te veel oproepen gestart; probeer het later opnieuw" });
@@ -350,7 +372,12 @@ function createApp({ fetchImpl = global.fetch, verifyWebhookEvent = verifyEleven
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
-    res.set({ "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY" });
+    res.set({
+      "X-Content-Type-Options": "nosniff",
+      "Referrer-Policy": "no-referrer",
+      "X-Frame-Options": "DENY",
+      "Permissions-Policy": "camera=(), microphone=(), geolocation=()"
+    });
     next();
   });
 
@@ -389,7 +416,7 @@ function createApp({ fetchImpl = global.fetch, verifyWebhookEvent = verifyEleven
   app.get("/outbound", basicAuth, (_req, res) => {
     try {
       const token = crypto.randomBytes(32).toString("base64url");
-      csrfTokens.set(token, Date.now() + CSRF_TTL_MS);
+      storeCsrfToken(csrfTokens, token);
       res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'" });
       return res.type("html").send(outboundPage({ contacts: parseContacts(), csrfToken: token }));
     } catch (error) {
@@ -404,11 +431,11 @@ function createApp({ fetchImpl = global.fetch, verifyWebhookEvent = verifyEleven
     try {
       const result = await startOutboundCall(fetchImpl, { contactId: req.body.contact_id, message: req.body.message, question: req.body.question });
       const token = crypto.randomBytes(32).toString("base64url");
-      csrfTokens.set(token, Date.now() + CSRF_TTL_MS);
+      storeCsrfToken(csrfTokens, token);
       return res.type("html").send(outboundPage({ contacts: parseContacts(), csrfToken: token, notice: `De oproep aan ${result.contactName} is gestart.` }));
     } catch (error) {
       const token = crypto.randomBytes(32).toString("base64url");
-      csrfTokens.set(token, Date.now() + CSRF_TTL_MS);
+      storeCsrfToken(csrfTokens, token);
       return res.status(400).type("html").send(outboundPage({ contacts: parseContacts(), csrfToken: token, error: error.message }));
     }
   });
